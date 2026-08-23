@@ -30,16 +30,21 @@ Item {
   property string autopilotAddress: ""     // window the autopilot chose
   property string meetingScanAction: ""    // "" | "start" | "offer"
 
-  // Meeting-end detection. PWA windows never close and their titles keep
-  // matching, but a call always holds a microphone capture stream — when it
-  // disappears for a while, the meeting is over.
+  // Call detection. Two system-level signals, no app knowledge needed:
+  //  - camera: a process holds /dev/video* -> a video call or recording.
+  //    This is the default trigger; the prompter only matters on video.
+  //  - microphone: a PipeWire capture stream -> any call (opt-in trigger,
+  //    and part of the end condition so muting video mid-call is not "end").
   property bool meetingFollow: false       // window mode came from meeting detection
   property bool callWasActive: false
+  property var cameraHolders: []           // [{device, comm, chain:[pids]}]
+  readonly property bool cameraActive: cameraHolders.length > 0
+
   // A capture stream is isStream && audio && !isSink (playback streams
   // report isSink, cf. omarchy.media). Audio-filter infrastructure like
   // noise suppressors (capture.ns_source) holds a capture stream around the
   // clock and must not count as a call.
-  readonly property bool callActive: {
+  readonly property bool micActive: {
     var nodes = Pipewire.nodes ? Pipewire.nodes.values : []
     var infra = /^capture\.|noise|rnnoise|echo[-_ ]?cancel|filter[-_ ]?chain|^ns[-_ ]|_ns_/i
     for (var i = 0; i < nodes.length; i++) {
@@ -51,20 +56,26 @@ Item {
     return false
   }
 
-  // The microphone is the one reliable call signal: titles never change on
-  // PWA windows and openwindow never fires for them. A rising edge means a
-  // meeting just started; a falling edge during a followed meeting means it
-  // ended.
+  // In a call at all (end condition): camera OR mic still held.
+  readonly property bool callActive: cameraActive || micActive
+  // Should the autopilot act (start condition): camera, or mic if opted in.
+  readonly property bool triggerActive: cameraActive || (profile.micTrigger && micActive)
+
+  onTriggerActiveChanged: {
+    console.log("prompter: trigger " + (triggerActive ? "on" : "off")
+      + " (camera=" + cameraActive + ", mic=" + micActive + ", mode=" + activeMode + ")")
+    if (!triggerActive) return
+    if (profile.autopilot && prompterConnected
+        && activeMode !== "teleprompter" && activeMode !== "window") {
+      scanForMeeting(profile.autopilotConfirm ? "offer" : "start")
+    }
+  }
+
   onCallActiveChanged: {
-    console.log("prompter: call " + (callActive ? "started" : "ended")
-      + " (mode=" + activeMode + ", autopilot=" + profile.autopilot + ")")
     if (callActive) {
       if (meetingFollow && activeMode === "window") {
         callWasActive = true
         meetingEndTimer.stop()
-      } else if (profile.autopilot && prompterConnected
-                 && activeMode !== "teleprompter" && activeMode !== "window") {
-        scanForMeeting(profile.autopilotConfirm ? "offer" : "start")
       }
     } else {
       if (meetingFollow && activeMode === "window" && callWasActive)
@@ -140,7 +151,7 @@ Item {
     id: lateOfferTimer
     interval: 3000
     onTriggered: {
-      if (root.callActive && root.profile.autopilot && root.prompterConnected
+      if (root.triggerActive && root.profile.autopilot && root.prompterConnected
           && root.activeMode === "off")
         root.scanForMeeting(root.profile.autopilotConfirm ? "offer" : "start")
     }
@@ -584,7 +595,12 @@ Item {
         if (root.meetingScanAction !== "") {
           var action = root.meetingScanAction
           root.meetingScanAction = ""
-          var meeting = Model.findMeetingClient(root.clients, root.monitors)
+          // The camera holder's process tree points at the exact window —
+          // works for any app, known or not. Patterns are the fallback.
+          var meeting = root.cameraActive
+            ? Model.windowForCameraHolders(root.clients, root.cameraHolders, root.monitors)
+            : null
+          if (!meeting) meeting = Model.findMeetingClient(root.clients, root.monitors)
           console.log("prompter: meeting scan (" + action + ") -> "
             + (meeting ? String(meeting.address) : "none"))
           if (!meeting) {
@@ -658,6 +674,38 @@ Item {
   }
 
   Process { id: saveProcess }
+
+  // Which processes hold a camera right now. fuser prints holder PIDs; the
+  // ancestor chain is included because browsers and Electron apps open the
+  // device from a helper process while the window belongs to the parent.
+  Process {
+    id: cameraPollProcess
+    command: ["sh", "-c",
+      'for dev in /dev/video*; do [ -e "$dev" ] || continue; ' +
+      'for pid in $(fuser "$dev" 2>/dev/null); do ' +
+      'chain="$pid"; p="$pid"; i=0; while [ "$i" -lt 8 ]; do ' +
+      'p=$(awk \'/^PPid:/{print $2}\' "/proc/$p/status" 2>/dev/null); ' +
+      '[ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null || break; ' +
+      'chain="$chain,$p"; i=$((i+1)); done; ' +
+      'printf "%s|%s|%s\\n" "$dev" "$(cat "/proc/$pid/comm" 2>/dev/null)" "$chain"; ' +
+      'done; done']
+    stdout: StdioCollector { id: cameraPollOutput; waitForEnd: true }
+    onExited: {
+      var holders = Model.parseCameraHolders(cameraPollOutput.text)
+      // Rebuild only on change so the property does not churn every poll.
+      if (JSON.stringify(holders) !== JSON.stringify(root.cameraHolders))
+        root.cameraHolders = holders
+    }
+  }
+
+  Timer {
+    id: cameraPoll
+    interval: 3000
+    repeat: true
+    running: root.prompterConnected
+    triggeredOnStart: true
+    onTriggered: { if (!cameraPollProcess.running) cameraPollProcess.running = true }
+  }
 
   Process {
     id: doctorProcess
@@ -822,6 +870,9 @@ Item {
         monitors: root.monitors.length,
         profile: root.profile,
         callActive: root.callActive,
+        cameraActive: root.cameraActive,
+        micActive: root.micActive,
+        cameraHolders: root.cameraHolders,
         meetingFollow: root.meetingFollow,
         autopilotAddress: root.autopilotAddress,
         stateLoaded: root.stateLoaded,

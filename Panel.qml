@@ -429,6 +429,17 @@ Panel {
                 autopilotConfirm: !root.service.profile.autopilotConfirm
               })
             }
+
+            Toggle {
+              visible: root.service ? root.service.profile.autopilot : false
+              width: parent.width
+              label: "Also trigger on audio-only calls"
+              description: "React to the microphone too, not just the camera"
+              checked: root.service ? root.service.profile.micTrigger : false
+              onClicked: root.service.persistProfile({
+                micTrigger: !root.service.profile.micTrigger
+              })
+            }
           }
 
           // ------------------------------------------------- Teleprompter

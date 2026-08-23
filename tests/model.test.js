@@ -14,7 +14,8 @@ new Function(
       "isPrompterMonitor", "findPrompter", "sourceCandidates", "monitorByName",
       "setupFingerprint", "wlMirrorCommand", "streamRegionLine",
       "streamTransformLine", "regionForClient", "regionForOutput", "monitorForClient",
-      "matchMeetingWindow", "matchMeetingTitle", "findMeetingClient", "parseScript", "formatDuration",
+      "matchMeetingWindow", "matchMeetingTitle", "findMeetingClient",
+      "parseCameraHolders", "windowForCameraHolders", "parseScript", "formatDuration",
       "remainingSeconds", "doctorChecks", "fixCommand", "defaultProfile",
       "monitorKey", "DEFAULT_MEETING_TITLE_PATTERNS",
     ]
@@ -91,6 +92,24 @@ check("scan prefers dedicated client over pwa",
     { class: "teams-for-linux", title: "call", mapped: true, monitor: 1 },
   ], monitors).class,
   "teams-for-linux")
+
+// Camera holders: the browser's video-capture helper (pid 5001) holds the
+// device; the window belongs to an ancestor (pid 4000).
+const holders = Model.parseCameraHolders(
+  "/dev/video0|chromium|5001,4000,1200\n/dev/video1|pipewire|900\nbroken line\n")
+check("camera holder parsing", holders.length, 2)
+check("holder chain numbers", holders[0].chain, [5001, 4000, 1200])
+const browserWin = { class: "chromium", title: "some tab", pid: 4000, mapped: true, monitor: 1, focusHistoryID: 2 }
+const meetWin = { class: "chromium", title: "Google Meet - x", pid: 4000, mapped: true, monitor: 1, focusHistoryID: 5 }
+check("camera pid chain finds window",
+  Model.windowForCameraHolders([{ class: "foot", pid: 77, mapped: true, monitor: 1 }, browserWin], holders, monitors).pid,
+  4000)
+check("meeting-looking window preferred among candidates",
+  Model.windowForCameraHolders([browserWin, meetWin], holders, monitors).title,
+  "Google Meet - x")
+check("no candidate when camera held by non-window process",
+  Model.windowForCameraHolders([browserWin], [{ device: "/dev/video1", comm: "pipewire", chain: [900] }], monitors),
+  null)
 
 const script = Model.parseScript("intro line\n\n# One\ntext one here\n\n## Two\nsecond text")
 check("implicit first chapter", script.chapters[0].title, "")

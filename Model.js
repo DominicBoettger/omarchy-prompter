@@ -205,6 +205,50 @@ function findMeetingClient(clients, monitors) {
 }
 
 // ---------------------------------------------------------------------------
+// Camera-based call detection
+
+// Parse the camera-poll script output: one "device|comm|pid,ppid,..." line
+// per process holding a /dev/video* node.
+function parseCameraHolders(text) {
+  var holders = []
+  var lines = String(text || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split("|")
+    if (parts.length < 3) continue
+    var chain = parts[2].split(",").map(function (p) { return Number(p) })
+      .filter(function (p) { return p > 1 })
+    if (!chain.length) continue
+    holders.push({ device: parts[0], comm: parts[1], chain: chain })
+  }
+  return holders
+}
+
+// The process holding the camera is usually a child (browser video-capture
+// utility, Electron helper), so match windows against the whole ancestor
+// chain. When several windows of the same app qualify (multi-window
+// browser), prefer the one that looks like a meeting, then the focused one.
+function windowForCameraHolders(clients, holders, monitors) {
+  var pids = {}
+  var list = holders instanceof Array ? holders : []
+  for (var h = 0; h < list.length; h++) {
+    var chain = list[h].chain instanceof Array ? list[h].chain : []
+    for (var c = 0; c < chain.length; c++) pids[Number(chain[c])] = true
+  }
+  var candidates = (clients instanceof Array ? clients : []).filter(function (w) {
+    if (!w || w.mapped === false) return false
+    if (String(w["class"] || "") === "at.yrlf.wl_mirror") return false
+    if (!pids[Number(w.pid)]) return false
+    var monitor = monitorForClient(w, monitors)
+    return !(monitor && isPrompterMonitor(monitor))
+  })
+  if (!candidates.length) return null
+  var meeting = findMeetingClient(candidates, monitors)
+  if (meeting) return meeting
+  var focused = candidates.filter(function (w) { return w.focusHistoryID === 0 })
+  return focused.length ? focused[0] : candidates[0]
+}
+
+// ---------------------------------------------------------------------------
 // Teleprompter scripts
 
 // Markdown headings (# / ##) open chapters; text in front of the first
@@ -351,7 +395,8 @@ function defaultProfile() {
     scaling: "fit",
     showCursor: false,
     autopilot: false,
-    autopilotConfirm: true
+    autopilotConfirm: true,
+    micTrigger: false        // also trigger on audio-only calls
   }
 }
 
