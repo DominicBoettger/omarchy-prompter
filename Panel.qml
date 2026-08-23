@@ -154,6 +154,19 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
+          // One-click action for a meeting the autopilot has detected.
+          Button {
+            visible: root.service !== null && root.prompterConnected
+              && root.service.autopilotAddress !== ""
+              && !(root.activeMode === "window"
+                   && root.service.targetWindowAddress === root.service.autopilotAddress)
+            width: parent.width
+            text: "󰍫  Meeting detected — mirror it"
+            bordered: true
+            hasCursor: true
+            onClicked: root.service.startWindowMirror(root.service.autopilotAddress, "meeting", true)
+          }
+
           // ------------------------------------------------- Doctor
           Column {
             visible: root.service !== null && root.service.doctorRan && root.service.doctorFailures.length > 0

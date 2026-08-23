@@ -28,7 +28,7 @@ Item {
   property bool stopRequested: false
   property string lastError: ""
   property string autopilotAddress: ""     // window the autopilot chose
-  property bool pendingMeetingScan: false
+  property string meetingScanAction: ""    // "" | "start" | "offer"
 
   // Meeting-end detection. PWA windows never close and their titles keep
   // matching, but a call always holds a microphone capture stream — when it
@@ -51,13 +51,23 @@ Item {
     return false
   }
 
+  // The microphone is the one reliable call signal: titles never change on
+  // PWA windows and openwindow never fires for them. A rising edge means a
+  // meeting just started; a falling edge during a followed meeting means it
+  // ended.
   onCallActiveChanged: {
-    if (!meetingFollow || activeMode !== "window") return
     if (callActive) {
-      callWasActive = true
-      meetingEndTimer.stop()
-    } else if (callWasActive) {
-      meetingEndTimer.restart()
+      if (meetingFollow && activeMode === "window") {
+        callWasActive = true
+        meetingEndTimer.stop()
+      } else if (profile.autopilot && prompterConnected
+                 && activeMode !== "teleprompter" && activeMode !== "window") {
+        scanForMeeting(profile.autopilotConfirm ? "offer" : "start")
+      }
+    } else {
+      if (meetingFollow && activeMode === "window" && callWasActive)
+        meetingEndTimer.restart()
+      if (activeMode !== "window") autopilotAddress = ""   // re-offer on next call
     }
   }
 
@@ -225,9 +235,9 @@ Item {
 
   // A meeting window usually exists long before the meeting starts (PWAs
   // live all day), so look through the open clients instead of waiting for
-  // a new window.
-  function scanForMeeting() {
-    pendingMeetingScan = true
+  // a new window. action "start" mirrors the find, "offer" notifies.
+  function scanForMeeting(action) {
+    meetingScanAction = action === "offer" ? "offer" : "start"
     refreshClients()
   }
 
@@ -471,11 +481,13 @@ Item {
         if (pendingRefocus !== "") refocusTimer.restart()
         break
       }
+      // Class-only here: PWA titles match around the clock, and the real
+      // meeting-start trigger is the microphone (onCallActiveChanged).
       if (!profile.autopilot || !prompterConnected || activeMode === "teleprompter") break
       var address = "0x" + parts[0]
       var cls = String(parts[2] || "")
       var title = parts.slice(3).join(",")
-      if (Model.matchMeetingWindow({ "class": cls, title: title }, null, Model.DEFAULT_MEETING_TITLE_PATTERNS)) {
+      if (Model.matchMeetingWindow({ "class": cls, title: title }, null, null)) {
         autopilotAddress = address
         if (profile.autopilotConfirm) {
           notifyProcess.command = ["notify-send", "-a", "Prompter", "Meeting window detected",
@@ -484,26 +496,6 @@ Item {
         } else {
           startWindowMirror(address, cls, true)
         }
-      }
-      break
-    }
-    // Joining a meeting in an already-open window (Teams/Meet PWAs) only
-    // changes the title — openwindow never fires.
-    case "windowtitlev2": {
-      if (!profile.autopilot || !prompterConnected || activeMode === "teleprompter") break
-      var titleParts = data.split(",")
-      var taddr = "0x" + titleParts[0]
-      var ttitle = titleParts.slice(1).join(",")
-      if (activeMode === "window" && taddr === targetWindowAddress) break
-      if (!Model.matchMeetingTitle({ title: ttitle }, null)) break
-      if (autopilotAddress === taddr) break   // already offered or mirrored
-      autopilotAddress = taddr
-      if (profile.autopilotConfirm) {
-        notifyProcess.command = ["notify-send", "-a", "Prompter", "Meeting window detected",
-          "Open the Prompter panel or run: omarchy-shell prompter mirrorMeeting"]
-        notifyProcess.startDetached()
-      } else {
-        startWindowMirror(taddr, ttitle, true)
       }
       break
     }
@@ -571,14 +563,22 @@ Item {
         var parsed = JSON.parse(clientsOutput.text)
         root.clients = parsed instanceof Array ? parsed : []
         root.updateWindowRegion()
-        if (root.pendingMeetingScan) {
-          root.pendingMeetingScan = false
+        if (root.meetingScanAction !== "") {
+          var action = root.meetingScanAction
+          root.meetingScanAction = ""
           var meeting = Model.findMeetingClient(root.clients, root.monitors)
-          if (meeting)
+          if (!meeting) {
+            if (action === "start")
+              root.lastError = "No meeting window found (Teams, Zoom, Meet)."
+          } else if (action === "start") {
             root.startWindowMirror(String(meeting.address),
               String(meeting["class"] || meeting.title || ""), true)
-          else
-            root.lastError = "No meeting window found (Teams, Zoom, Meet)."
+          } else if (root.autopilotAddress !== String(meeting.address)) {
+            root.autopilotAddress = String(meeting.address)
+            notifyProcess.command = ["notify-send", "-a", "Prompter", "Meeting call detected",
+              "Mirror it from the Prompter panel, or run: omarchy-shell prompter mirrorMeeting"]
+            notifyProcess.startDetached()
+          }
         }
       } catch (e) {}
     }
@@ -774,7 +774,7 @@ Item {
     function mirrorActive(): void { root.mirrorActiveWindow() }
     function mirrorMeeting(): void {
       if (root.autopilotAddress !== "") root.startWindowMirror(root.autopilotAddress, "meeting", true)
-      else root.scanForMeeting()
+      else root.scanForMeeting("start")
     }
     function region(): void { root.startRegionMirror() }
     function teleprompter(): void { root.startTeleprompter() }
@@ -803,6 +803,7 @@ Item {
         profile: root.profile,
         callActive: root.callActive,
         meetingFollow: root.meetingFollow,
+        autopilotAddress: root.autopilotAddress,
         stateLoaded: root.stateLoaded,
         doctorHealthy: root.doctorHealthy,
         lastError: root.lastError
