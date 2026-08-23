@@ -8,8 +8,10 @@ this plugin replaces it and goes further.
   (or just your meeting window, followed live) onto the prompter. Your screen
   share keeps capturing the real display at native 4K — the prompter is a
   read-only copy, not a detached surface.
-- **Meeting autopilot.** Teams, Zoom and Meet windows are detected the moment
-  they open and offered on the prompter.
+- **Meeting autopilot.** Teams, Zoom and Meet are detected when a window
+  opens *or* when an already-open window (PWAs!) joins a call. When the call
+  ends — detected via the microphone stream — the prompter offers to switch
+  back (or does it automatically in instant mode).
 - **Native teleprompter.** Markdown scripts with chapters, smooth scrolling,
   eyeline marker, countdown, remaining-time estimate, beam-splitter flip —
   rendered by the Omarchy shell in your theme's colors.

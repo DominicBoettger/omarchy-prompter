@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Hyprland
+import Quickshell.Services.Pipewire
 import "Model.js" as Model
 
 // Engine singleton. The bar renders one widget per monitor, so anything that
@@ -28,6 +29,37 @@ Item {
   property string lastError: ""
   property string autopilotAddress: ""     // window the autopilot chose
   property bool pendingMeetingScan: false
+
+  // Meeting-end detection. PWA windows never close and their titles keep
+  // matching, but a call always holds a microphone capture stream — when it
+  // disappears for a while, the meeting is over.
+  property bool meetingFollow: false       // window mode came from meeting detection
+  property bool callWasActive: false
+  // A capture stream is isStream && audio && !isSink (playback streams
+  // report isSink, cf. omarchy.media). Audio-filter infrastructure like
+  // noise suppressors (capture.ns_source) holds a capture stream around the
+  // clock and must not count as a call.
+  readonly property bool callActive: {
+    var nodes = Pipewire.nodes ? Pipewire.nodes.values : []
+    var infra = /^capture\.|noise|rnnoise|echo[-_ ]?cancel|filter[-_ ]?chain|^ns[-_ ]|_ns_/i
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i]
+      if (!n || !n.isStream || !n.audio || n.isSink === true) continue
+      if (infra.test(String(n.name || ""))) continue
+      return true
+    }
+    return false
+  }
+
+  onCallActiveChanged: {
+    if (!meetingFollow || activeMode !== "window") return
+    if (callActive) {
+      callWasActive = true
+      meetingEndTimer.stop()
+    } else if (callWasActive) {
+      meetingEndTimer.restart()
+    }
+  }
 
   // The fullscreen mirror window grabs focus when it spawns (dynamic
   // windowrules are unavailable under the non-legacy config parser), so the
@@ -165,13 +197,16 @@ Item {
     persistProfile({ mode: "mirror" })
   }
 
-  function startWindowMirror(address, label) {
+  function startWindowMirror(address, label, isMeeting) {
     if (!prompterConnected) return
     stopTeleprompter()
     targetWindowAddress = String(address)
     targetWindowLabel = String(label || "")
     activeMode = "window"
     lastError = ""
+    meetingFollow = isMeeting === true
+    callWasActive = meetingFollow && callActive
+    meetingEndTimer.stop()
     refreshClients()   // region follows once the client list arrives
     followPoll.running = true
     persistProfile({ mode: "window" })
@@ -256,6 +291,9 @@ Item {
     mirrorSource = ""
     targetWindowAddress = ""
     autopilotAddress = ""
+    meetingFollow = false
+    callWasActive = false
+    meetingEndTimer.stop()
     followPoll.running = false
     if (mirrorProcess.running) mirrorProcess.signal(15)
     stopTeleprompter()
@@ -444,7 +482,7 @@ Item {
             "Open the Prompter panel or run: omarchy-shell prompter mirrorMeeting"]
           notifyProcess.startDetached()
         } else {
-          startWindowMirror(address, cls)
+          startWindowMirror(address, cls, true)
         }
       }
       break
@@ -465,7 +503,7 @@ Item {
           "Open the Prompter panel or run: omarchy-shell prompter mirrorMeeting"]
         notifyProcess.startDetached()
       } else {
-        startWindowMirror(taddr, ttitle)
+        startWindowMirror(taddr, ttitle, true)
       }
       break
     }
@@ -538,7 +576,7 @@ Item {
           var meeting = Model.findMeetingClient(root.clients, root.monitors)
           if (meeting)
             root.startWindowMirror(String(meeting.address),
-              String(meeting["class"] || meeting.title || ""))
+              String(meeting["class"] || meeting.title || ""), true)
           else
             root.lastError = "No meeting window found (Teams, Zoom, Meet)."
         }
@@ -676,6 +714,27 @@ Item {
   // ---------------------------------------------------------------------
   // Timers
 
+  // Fires once the microphone has been quiet for a while during a followed
+  // meeting — the call is over.
+  Timer {
+    id: meetingEndTimer
+    interval: 8000
+    onTriggered: {
+      if (!root.meetingFollow || root.activeMode !== "window" || root.callActive) return
+      if (root.profile.autopilotConfirm) {
+        root.callWasActive = false   // one reminder per call
+        notifyProcess.command = ["notify-send", "-a", "Prompter", "Meeting ended",
+          "The prompter is still mirroring. Stop it from the panel or run: omarchy-shell prompter off"]
+        notifyProcess.startDetached()
+      } else {
+        root.stopEngine()
+        notifyProcess.command = ["notify-send", "-a", "Prompter", "Meeting ended",
+          "Prompter is back to monitor mode."]
+        notifyProcess.startDetached()
+      }
+    }
+  }
+
   Timer {
     id: refocusTimer
     interval: 250
@@ -714,7 +773,7 @@ Item {
     function mirror(): void { root.startDisplayMirror("") }
     function mirrorActive(): void { root.mirrorActiveWindow() }
     function mirrorMeeting(): void {
-      if (root.autopilotAddress !== "") root.startWindowMirror(root.autopilotAddress, "meeting")
+      if (root.autopilotAddress !== "") root.startWindowMirror(root.autopilotAddress, "meeting", true)
       else root.scanForMeeting()
     }
     function region(): void { root.startRegionMirror() }
@@ -742,6 +801,8 @@ Item {
         mirrorRunning: mirrorProcess.running,
         monitors: root.monitors.length,
         profile: root.profile,
+        callActive: root.callActive,
+        meetingFollow: root.meetingFollow,
         stateLoaded: root.stateLoaded,
         doctorHealthy: root.doctorHealthy,
         lastError: root.lastError
