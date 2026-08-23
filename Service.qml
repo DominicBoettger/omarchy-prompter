@@ -324,7 +324,6 @@ Item {
 
   function stopEngine() {
     console.log("prompter: stopEngine (mode=" + activeMode + ")")
-    console.trace()
     stopRequested = true
     activeMode = "off"
     mirrorSource = ""
