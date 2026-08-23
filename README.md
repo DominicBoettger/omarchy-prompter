@@ -60,6 +60,9 @@ omarchy-shell prompter playPause     # toggle scrolling
 omarchy-shell prompter faster        # +10 px/s (slower: -10)
 omarchy-shell prompter nextChapter   # jump chapters (prevChapter)
 omarchy-shell prompter flip          # beam-splitter flip
+omarchy-shell prompter autopilot instant   # meeting detection: instant | on | off
+omarchy-shell prompter mirrorMeeting # mirror the detected meeting window
+omarchy-shell prompter status        # engine state as JSON
 omarchy-shell prompter off           # back to plain monitor mode
 ```
 
