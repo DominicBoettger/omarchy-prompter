@@ -14,7 +14,7 @@ new Function(
       "isPrompterMonitor", "findPrompter", "sourceCandidates", "monitorByName",
       "setupFingerprint", "wlMirrorCommand", "streamRegionLine",
       "streamTransformLine", "regionForClient", "regionForOutput", "monitorForClient",
-      "matchMeetingWindow", "parseScript", "formatDuration",
+      "matchMeetingWindow", "matchMeetingTitle", "findMeetingClient", "parseScript", "formatDuration",
       "remainingSeconds", "doctorChecks", "fixCommand", "defaultProfile",
       "monitorKey", "DEFAULT_MEETING_TITLE_PATTERNS",
     ]
@@ -67,6 +67,30 @@ check("editor does not match", Model.matchMeetingWindow({ class: "code", title: 
 check("title pattern matches when enabled",
   Model.matchMeetingWindow({ class: "chromium", title: "Meeting | Microsoft Teams" }, null, Model.DEFAULT_MEETING_TITLE_PATTERNS),
   true)
+
+// Chrome PWAs hide the host behind an app-id hash; only the title gives
+// Teams away (real-world shape from dob's machine).
+const teamsPwa = {
+  class: "chrome-ompifgpmddkgmclendfeacglnodjjndh-Default",
+  initialClass: "chrome-ompifgpmddkgmclendfeacglnodjjndh-Default",
+  title: "Microsoft Teams (PWA) - Calendar | Meeting with Dominic",
+  mapped: true, monitor: 1, focusHistoryID: 3,
+}
+check("chrome pwa class alone does not match", Model.matchMeetingWindow(teamsPwa), false)
+check("chrome pwa title matches", Model.matchMeetingTitle(teamsPwa, null), true)
+check("scan finds teams pwa among clients",
+  Model.findMeetingClient([
+    { class: "foot", title: "shell", mapped: true, monitor: 1 },
+    teamsPwa,
+    { class: "at.yrlf.wl_mirror", title: "Microsoft Teams mirror", mapped: true, monitor: 2 },
+  ], monitors).title,
+  teamsPwa.title)
+check("scan prefers dedicated client over pwa",
+  Model.findMeetingClient([
+    teamsPwa,
+    { class: "teams-for-linux", title: "call", mapped: true, monitor: 1 },
+  ], monitors).class,
+  "teams-for-linux")
 
 const script = Model.parseScript("intro line\n\n# One\ntext one here\n\n## Two\nsecond text")
 check("implicit first chapter", script.chapters[0].title, "")

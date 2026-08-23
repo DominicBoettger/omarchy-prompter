@@ -145,11 +145,24 @@ var DEFAULT_MEETING_PATTERNS = [
   // Electron Slack huddles run inside the main Slack window; opt-in only.
 ]
 
+// Chromium-family PWAs carry an opaque app-id hash in their class
+// (chrome-<hash>-Default), so PWAs are only recognizable by title.
 var DEFAULT_MEETING_TITLE_PATTERNS = [
   "Microsoft Teams",
   "Zoom (Meeting|Workplace)",
   "Google Meet",
+  "meet\\.google\\.com",
 ]
+
+function matchMeetingTitle(client, titlePatterns) {
+  var tps = titlePatterns instanceof Array && titlePatterns.length
+    ? titlePatterns : DEFAULT_MEETING_TITLE_PATTERNS
+  var title = String(client && client.title || "")
+  for (var i = 0; i < tps.length; i++) {
+    try { if (new RegExp(tps[i]).test(title)) return true } catch (e) {}
+  }
+  return false
+}
 
 function matchMeetingWindow(client, classPatterns, titlePatterns) {
   if (!client) return false
@@ -167,6 +180,28 @@ function matchMeetingWindow(client, classPatterns, titlePatterns) {
     try { if (new RegExp(tps[j]).test(title)) return true } catch (e) {}
   }
   return false
+}
+
+// Find a meeting window among the already-open clients (a Teams PWA lives
+// all day; joining a meeting only changes its title). Class matches rank
+// above title matches; the currently focused one wins within a rank.
+function findMeetingClient(clients, monitors) {
+  var list = clients instanceof Array ? clients : []
+  var best = null
+  var bestScore = 0
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i]
+    if (!c || c.mapped === false) continue
+    if (String(c["class"] || "") === "at.yrlf.wl_mirror") continue
+    var monitor = monitorForClient(c, monitors)
+    if (monitor && isPrompterMonitor(monitor)) continue
+    var score = 0
+    if (matchMeetingWindow(c, null, null)) score = 4
+    else if (matchMeetingTitle(c, null)) score = 2
+    if (score > 0 && c.focusHistoryID === 0) score += 1
+    if (score > bestScore) { best = c; bestScore = score }
+  }
+  return best
 }
 
 // ---------------------------------------------------------------------------

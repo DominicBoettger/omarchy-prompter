@@ -27,6 +27,7 @@ Item {
   property bool stopRequested: false
   property string lastError: ""
   property string autopilotAddress: ""     // window the autopilot chose
+  property bool pendingMeetingScan: false
 
   // The fullscreen mirror window grabs focus when it spawns (dynamic
   // windowrules are unavailable under the non-legacy config parser), so the
@@ -185,6 +186,14 @@ Item {
   function mirrorActiveWindow() {
     if (activeWindowProcess.running) return
     activeWindowProcess.running = true
+  }
+
+  // A meeting window usually exists long before the meeting starts (PWAs
+  // live all day), so look through the open clients instead of waiting for
+  // a new window.
+  function scanForMeeting() {
+    pendingMeetingScan = true
+    refreshClients()
   }
 
   function isMirrorClient(client) {
@@ -440,6 +449,26 @@ Item {
       }
       break
     }
+    // Joining a meeting in an already-open window (Teams/Meet PWAs) only
+    // changes the title — openwindow never fires.
+    case "windowtitlev2": {
+      if (!profile.autopilot || !prompterConnected || activeMode === "teleprompter") break
+      var titleParts = data.split(",")
+      var taddr = "0x" + titleParts[0]
+      var ttitle = titleParts.slice(1).join(",")
+      if (activeMode === "window" && taddr === targetWindowAddress) break
+      if (!Model.matchMeetingTitle({ title: ttitle }, null)) break
+      if (autopilotAddress === taddr) break   // already offered or mirrored
+      autopilotAddress = taddr
+      if (profile.autopilotConfirm) {
+        notifyProcess.command = ["notify-send", "-a", "Prompter", "Meeting window detected",
+          "Open the Prompter panel or run: omarchy-shell prompter mirrorMeeting"]
+        notifyProcess.startDetached()
+      } else {
+        startWindowMirror(taddr, ttitle)
+      }
+      break
+    }
     case "closewindow": {
       var addr = "0x" + data
       if (activeMode === "window" && addr === targetWindowAddress) {
@@ -504,6 +533,15 @@ Item {
         var parsed = JSON.parse(clientsOutput.text)
         root.clients = parsed instanceof Array ? parsed : []
         root.updateWindowRegion()
+        if (root.pendingMeetingScan) {
+          root.pendingMeetingScan = false
+          var meeting = Model.findMeetingClient(root.clients, root.monitors)
+          if (meeting)
+            root.startWindowMirror(String(meeting.address),
+              String(meeting["class"] || meeting.title || ""))
+          else
+            root.lastError = "No meeting window found (Teams, Zoom, Meet)."
+        }
       } catch (e) {}
     }
   }
@@ -677,7 +715,7 @@ Item {
     function mirrorActive(): void { root.mirrorActiveWindow() }
     function mirrorMeeting(): void {
       if (root.autopilotAddress !== "") root.startWindowMirror(root.autopilotAddress, "meeting")
-      else root.mirrorActiveWindow()
+      else root.scanForMeeting()
     }
     function region(): void { root.startRegionMirror() }
     function teleprompter(): void { root.startTeleprompter() }
