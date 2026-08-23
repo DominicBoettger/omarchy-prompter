@@ -23,6 +23,7 @@ Panel {
   readonly property bool prompterConnected: service ? service.prompterConnected : false
   readonly property string activeMode: service ? service.activeMode : "off"
   readonly property bool engineRunning: service ? service.engineRunning : false
+  readonly property bool callUnmirrored: service ? (service.callActive && !service.engineRunning) : false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.5)
@@ -154,17 +155,22 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          // One-click action for a meeting the autopilot has detected.
+          // One-click action whenever a call is running and the prompter is
+          // not on it — state-based, so a missed notification costs nothing.
           Button {
             visible: root.service !== null && root.prompterConnected
-              && root.service.autopilotAddress !== ""
-              && !(root.activeMode === "window"
-                   && root.service.targetWindowAddress === root.service.autopilotAddress)
+              && root.service.callActive && root.activeMode !== "window"
+              && root.activeMode !== "teleprompter"
             width: parent.width
-            text: "󰍫  Meeting detected — mirror it"
+            text: "󰍫  Call in progress — mirror the meeting"
             bordered: true
             hasCursor: true
-            onClicked: root.service.startWindowMirror(root.service.autopilotAddress, "meeting", true)
+            onClicked: {
+              if (root.service.autopilotAddress !== "")
+                root.service.startWindowMirror(root.service.autopilotAddress, "meeting", true)
+              else
+                root.service.scanForMeeting("start")
+            }
           }
 
           // ------------------------------------------------- Doctor

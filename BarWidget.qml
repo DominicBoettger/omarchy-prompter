@@ -33,6 +33,7 @@ BarWidget {
     if (panelLoader.item && panelLoader.item.close) panelLoader.item.close()
   }
 
+  readonly property bool callUnmirrored: panelLoader.item ? panelLoader.item.callUnmirrored === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
   function closeForPopoutSwitch() {
@@ -68,7 +69,9 @@ BarWidget {
       case "window": return "Prompter · mirroring window"
       case "region": return "Prompter · mirroring region"
       case "teleprompter": return "Prompter · teleprompter"
-      default: return "Prompter · monitor mode"
+      default: return root.callUnmirrored
+        ? "Prompter · call in progress, not mirrored"
+        : "Prompter · monitor mode"
       }
     }
     iconComponent: Component {
@@ -83,11 +86,12 @@ BarWidget {
         }
 
         Rectangle {
-          visible: root.engineRunning
+          visible: root.engineRunning || root.callUnmirrored
           width: Math.max(4, Math.round(button.fontSize * 0.28))
           height: width
           radius: width / 2
-          color: Color.accent
+          // Accent while mirroring; urgent while a call runs unmirrored.
+          color: root.engineRunning ? Color.accent : Color.urgent
           anchors.right: barGlyph.right
           anchors.bottom: barGlyph.bottom
           anchors.rightMargin: -Style.space(1)

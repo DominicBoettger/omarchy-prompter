@@ -56,6 +56,8 @@ Item {
   // meeting just started; a falling edge during a followed meeting means it
   // ended.
   onCallActiveChanged: {
+    console.log("prompter: call " + (callActive ? "started" : "ended")
+      + " (mode=" + activeMode + ", autopilot=" + profile.autopilot + ")")
     if (callActive) {
       if (meetingFollow && activeMode === "window") {
         callWasActive = true
@@ -129,6 +131,19 @@ Item {
     refreshMonitors()
     runDoctor()
     listScripts()
+    lateOfferTimer.start()
+  }
+
+  // Catch calls whose rising edge we never saw (service started or profile
+  // loaded mid-call) — offer once things have settled.
+  Timer {
+    id: lateOfferTimer
+    interval: 3000
+    onTriggered: {
+      if (root.callActive && root.profile.autopilot && root.prompterConnected
+          && root.activeMode === "off")
+        root.scanForMeeting(root.profile.autopilotConfirm ? "offer" : "start")
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -567,6 +582,8 @@ Item {
           var action = root.meetingScanAction
           root.meetingScanAction = ""
           var meeting = Model.findMeetingClient(root.clients, root.monitors)
+          console.log("prompter: meeting scan (" + action + ") -> "
+            + (meeting ? String(meeting.address) : "none"))
           if (!meeting) {
             if (action === "start")
               root.lastError = "No meeting window found (Teams, Zoom, Meet)."
