@@ -223,6 +223,7 @@ Item {
   }
 
   function startWindowMirror(address, label, isMeeting) {
+    console.log("prompter: startWindowMirror " + address + " meeting=" + (isMeeting === true))
     if (!prompterConnected) return
     stopTeleprompter()
     targetWindowAddress = String(address)
@@ -311,6 +312,8 @@ Item {
   }
 
   function stopEngine() {
+    console.log("prompter: stopEngine (mode=" + activeMode + ")")
+    console.trace()
     stopRequested = true
     activeMode = "off"
     mirrorSource = ""
