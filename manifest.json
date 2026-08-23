@@ -7,9 +7,12 @@
   "license": "MIT",
   "description": "Elgato Prompter control center for Omarchy. Eye-contact mirroring for video calls (your 4K screen share stays untouched), a native theme-aware teleprompter with markdown scripts, meeting autopilot, hotplug profiles per monitor setup, Stream Deck / keybinding control via IPC, and a setup doctor that automates the DisplayLink driver install.",
   "kinds": [
+    "service",
     "bar-widget"
   ],
+  "keepLoaded": true,
   "entryPoints": {
+    "service": "Service.qml",
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {

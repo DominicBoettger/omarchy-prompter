@@ -5,16 +5,16 @@ import qs.Commons
 import "Model.js" as Model
 
 // Fullscreen teleprompter surface on the prompter's screen. All control state
-// (script, speed, playing, chapter) lives on the panel; this window renders it.
+// (script, speed, playing, chapter) lives on the service; this window renders it.
 PanelWindow {
   id: overlay
 
-  required property var panel
+  required property var service
 
   readonly property var prompterScreen: {
     var screens = Quickshell.screens || []
     for (var i = 0; i < screens.length; i++) {
-      if (String(screens[i].name) === panel.prompterName) return screens[i]
+      if (String(screens[i].name) === service.prompterName) return screens[i]
     }
     return null
   }
@@ -28,8 +28,8 @@ PanelWindow {
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
   exclusionMode: ExclusionMode.Ignore
 
-  readonly property real eyelineY: height * panel.eyelinePosition
-  readonly property real baseFontSize: Math.round(30 * panel.fontScale)
+  readonly property real eyelineY: height * service.eyelinePosition
+  readonly property real baseFontSize: Math.round(30 * service.fontScale)
   property int countdown: 0
 
   function chapterY(index) {
@@ -42,15 +42,15 @@ PanelWindow {
   }
 
   Connections {
-    target: overlay.panel
-    function onTeleprompterChapterChanged() { overlay.jumpToChapter(overlay.panel.teleprompterChapter) }
+    target: overlay.service
+    function onTeleprompterChapterChanged() { overlay.jumpToChapter(overlay.service.teleprompterChapter) }
     function onTeleprompterPlayingChanged() {
-      if (overlay.panel.teleprompterPlaying && scroller.contentY <= 1)
+      if (overlay.service.teleprompterPlaying && scroller.contentY <= 1)
         overlay.countdown = 3
     }
     function onCurrentScriptTextChanged() {
       scroller.contentY = 0
-      overlay.panel.teleprompterChapter = 0
+      overlay.service.teleprompterChapter = 0
     }
   }
 
@@ -64,14 +64,14 @@ PanelWindow {
   // Scroll driver: fixed cadence, speed in logical pixels per second.
   Timer {
     interval: 16
-    running: overlay.panel.teleprompterPlaying && overlay.countdown === 0
+    running: overlay.service.teleprompterPlaying && overlay.countdown === 0
     repeat: true
     onTriggered: {
       var max = Math.max(0, scroller.contentHeight - scroller.height)
-      var next = scroller.contentY + overlay.panel.scrollSpeed * (interval / 1000)
+      var next = scroller.contentY + overlay.service.scrollSpeed * (interval / 1000)
       if (next >= max) {
         scroller.contentY = max
-        overlay.panel.teleprompterPlaying = false
+        overlay.service.teleprompterPlaying = false
       } else {
         scroller.contentY = next
       }
@@ -85,7 +85,7 @@ PanelWindow {
     // The beam-splitter shows a mirrored image; flip the whole content so the
     // text reads correctly through the glass.
     transform: Scale {
-      xScale: overlay.panel.teleprompterFlip ? -1 : 1
+      xScale: overlay.service.teleprompterFlip ? -1 : 1
       origin.x: overlay.width / 2
     }
 
@@ -107,7 +107,7 @@ PanelWindow {
 
         Repeater {
           id: chapterRepeater
-          model: overlay.panel.scriptModel.chapters
+          model: overlay.service.scriptModel.chapters
           delegate: Column {
             width: scriptColumn.width
             spacing: Math.round(overlay.baseFontSize * 0.3)
@@ -184,7 +184,7 @@ PanelWindow {
       text: {
         var max = Math.max(1, scroller.contentHeight - scroller.height)
         var pct = Math.round(Math.min(1, scroller.contentY / max) * 100)
-        var remaining = Model.remainingSeconds(max - scroller.contentY, overlay.panel.scrollSpeed)
+        var remaining = Model.remainingSeconds(max - scroller.contentY, overlay.service.scrollSpeed)
         return pct + "% · " + (remaining < 0 ? "–" : Model.formatDuration(remaining))
       }
       color: Qt.darker(Color.foreground, 1.6)
@@ -210,7 +210,7 @@ PanelWindow {
 
     // Idle hint when stopped at the top
     Text {
-      visible: !overlay.panel.teleprompterPlaying && scroller.contentY <= 1 && overlay.countdown === 0
+      visible: !overlay.service.teleprompterPlaying && scroller.contentY <= 1 && overlay.countdown === 0
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
       anchors.bottomMargin: Math.round(overlay.height * 0.04)

@@ -61,7 +61,7 @@ function setupFingerprint(monitors) {
 function wlMirrorCommand(opts) {
   var argv = ["wl-mirror", "--stream", "--fullscreen-output", String(opts.prompterName)]
   argv.push("-s", opts.scaling === "cover" ? "cover" : "fit")
-  if (!opts.showCursor) argv.push("--no-cursor")
+  if (!opts.showCursor) argv.push("--no-show-cursor")
   if (opts.flip) argv.push("-t", "flipX")
   if (opts.region) argv.push("-r", String(opts.region))
   else argv.push(String(opts.source))
@@ -82,30 +82,43 @@ function streamFullscreenLine(prompterName) {
   return "--fullscreen-output '" + String(prompterName).replace(/'/g, "") + "'"
 }
 
-// wl-mirror regions are output-local: "x,y WxH output". Hyprland clients
-// report global layout coordinates, monitors report their own origin.
+// wl-mirror regions use global logical layout coordinates (slurp's format);
+// a trailing output name binds the region to that output, and the region
+// must lie inside it. Hyprland clients already report global coordinates.
 function regionForClient(client, monitor) {
   if (!client || !monitor) return ""
   var at = client.at instanceof Array ? client.at : [0, 0]
   var size = client.size instanceof Array ? client.size : [0, 0]
   var scale = Number(monitor.scale || 1) || 1
-  var x = Math.round(Number(at[0]) - Number(monitor.x || 0))
-  var y = Math.round(Number(at[1]) - Number(monitor.y || 0))
+  var x = Math.round(Number(at[0]))
+  var y = Math.round(Number(at[1]))
   var w = Math.round(Number(size[0]))
   var h = Math.round(Number(size[1]))
-  // Hyprland positions are logical; wl-mirror regions are logical too, so no
-  // scale conversion is needed. Clamp to the monitor so partially off-screen
-  // windows still produce a valid region.
+  // Clamp to the monitor's global rect so partially off-screen windows still
+  // produce a region wl-mirror accepts.
+  var mx = Math.round(Number(monitor.x || 0))
+  var my = Math.round(Number(monitor.y || 0))
   var mw = Math.round(Number(monitor.width || 0) / scale)
   var mh = Math.round(Number(monitor.height || 0) / scale)
   if (mw > 0 && mh > 0) {
-    if (x < 0) { w += x; x = 0 }
-    if (y < 0) { h += y; y = 0 }
-    w = Math.min(w, mw - x)
-    h = Math.min(h, mh - y)
+    if (x < mx) { w -= mx - x; x = mx }
+    if (y < my) { h -= my - y; y = my }
+    w = Math.min(w, mx + mw - x)
+    h = Math.min(h, my + mh - y)
   }
   if (w <= 0 || h <= 0) return ""
   return x + "," + y + " " + w + "x" + h + " " + String(monitor.name)
+}
+
+// Full-output region in global logical coordinates.
+function regionForOutput(monitor) {
+  if (!monitor) return ""
+  var scale = Number(monitor.scale || 1) || 1
+  var w = Math.round(Number(monitor.width || 0) / scale)
+  var h = Math.round(Number(monitor.height || 0) / scale)
+  if (w <= 0 || h <= 0) return ""
+  return Math.round(Number(monitor.x || 0)) + "," + Math.round(Number(monitor.y || 0))
+    + " " + w + "x" + h + " " + String(monitor.name)
 }
 
 // Which monitor a client sits on, resolved via Hyprland's client.monitor id.

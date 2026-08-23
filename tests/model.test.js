@@ -13,7 +13,7 @@ new Function(
     [
       "isPrompterMonitor", "findPrompter", "sourceCandidates", "monitorByName",
       "setupFingerprint", "wlMirrorCommand", "streamRegionLine",
-      "streamTransformLine", "regionForClient", "monitorForClient",
+      "streamTransformLine", "regionForClient", "regionForOutput", "monitorForClient",
       "matchMeetingWindow", "parseScript", "formatDuration",
       "remainingSeconds", "doctorChecks", "fixCommand", "defaultProfile",
       "monitorKey", "DEFAULT_MEETING_TITLE_PATTERNS",
@@ -44,17 +44,20 @@ check("fingerprint is port independent",
 
 check("wl-mirror argv",
   Model.wlMirrorCommand({ prompterName: "DVI-I-1", source: "DP-7", flip: true, scaling: "fit", showCursor: false }),
-  ["wl-mirror", "--stream", "--fullscreen-output", "DVI-I-1", "-s", "fit", "--no-cursor", "-t", "flipX", "DP-7"])
+  ["wl-mirror", "--stream", "--fullscreen-output", "DVI-I-1", "-s", "fit", "--no-show-cursor", "-t", "flipX", "DP-7"])
 check("wl-mirror argv with region",
   Model.wlMirrorCommand({ prompterName: "DVI-I-1", region: "0,0 3840x2160 DP-7", scaling: "cover", showCursor: true }),
   ["wl-mirror", "--stream", "--fullscreen-output", "DVI-I-1", "-s", "cover", "-r", "0,0 3840x2160 DP-7"])
 
-check("region for client on 4k",
+check("region for client on 4k stays global",
   Model.regionForClient({ at: [1224, 100], size: [1280, 720] }, samsung),
-  "200,100 1280x720 DP-7")
+  "1224,100 1280x720 DP-7")
 check("region clamps to scaled monitor",
   Model.regionForClient({ at: [4864, 0], size: [2000, 2000] }, laptop),
-  "0,0 1440x960 eDP-1")
+  "4864,0 1440x960 eDP-1")
+check("full output region is global",
+  Model.regionForOutput(laptop),
+  "4864,0 1440x960 eDP-1")
 check("client monitor resolution", Model.monitorForClient({ monitor: 1 }, monitors).name, "DP-7")
 
 check("teams-for-linux matches", Model.matchMeetingWindow({ class: "teams-for-linux" }), true)
