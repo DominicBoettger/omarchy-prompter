@@ -11,7 +11,9 @@ Panel {
   id: root
   moduleName: "io.github.dominicboettger.prompter"
   ipcTarget: "io.github.dominicboettger.prompter"
-  manageIpc: false
+  // The base Panel registers open/close/toggle on ipcTarget; engine commands
+  // live on the service's "prompter" target.
+  manageIpc: true
 
   property var anchorItem: null
   property var hostWidget: null

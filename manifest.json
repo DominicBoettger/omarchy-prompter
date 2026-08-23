@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.dominicboettger.prompter",
   "name": "Prompter",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Dominic Boettger",
   "license": "MIT",
   "description": "Elgato Prompter control center for Omarchy. Eye-contact mirroring for video calls (your 4K screen share stays untouched), a native theme-aware teleprompter with markdown scripts, meeting autopilot, hotplug profiles per monitor setup, Stream Deck / keybinding control via IPC, and a setup doctor that automates the DisplayLink driver install.",
