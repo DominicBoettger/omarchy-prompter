@@ -16,6 +16,7 @@ new Function(
       "streamTransformLine", "regionForClient", "regionForOutput", "monitorForClient",
       "matchMeetingWindow", "matchMeetingTitle", "findMeetingClient",
       "parseCameraHolders", "windowForCameraHolders", "parseScript", "formatDuration",
+      "guardedReadCommand", "saveStateCommand", "safeScriptName",
       "remainingSeconds", "doctorChecks", "fixCommand", "defaultProfile",
       "monitorKey", "DEFAULT_MEETING_TITLE_PATTERNS",
     ]
@@ -119,6 +120,40 @@ check("word count", script.totalWords, 7)
 check("duration format", Model.formatDuration(125), "2:05")
 check("remaining seconds", Model.remainingSeconds(400, 40), 10)
 check("remaining without speed", Model.remainingSeconds(400, 0), -1)
+
+// Script confinement: only plain basenames with known extensions survive.
+check("script name passes", Model.safeScriptName("My Talk_v2.md"), "My Talk_v2.md")
+check("path traversal rejected", Model.safeScriptName("../../etc/passwd"), "")
+check("absolute path rejected", Model.safeScriptName("/etc/passwd.md"), "")
+check("wrong extension rejected", Model.safeScriptName("script.sh"), "")
+check("hidden dotfile rejected", Model.safeScriptName(".hidden.md"), "")
+
+// Guarded IO commands run through sh with the path as a positional arg.
+const readCmd = Model.guardedReadCommand("/tmp/x state.json", 1000)
+check("guarded read is argv-safe", readCmd.slice(-2), ["/tmp/x state.json", "1000"])
+check("guarded read refuses symlinks", readCmd[2].includes('[ ! -L "$f" ]'), true)
+check("guarded read validates opened fd", readCmd[2].includes("/proc/self/fd/3"), true)
+const saveCmd = Model.saveStateCommand("/tmp/state.json", '{"a":1}')
+check("state write uses mktemp", saveCmd[2].includes("mktemp"), true)
+check("state write sets umask 077", saveCmd[2].includes("umask 077"), true)
+
+// Live behavior of the guarded IO scripts (run through real sh):
+const cp = require("child_process")
+const os = require("os")
+const fs2 = require("fs")
+const dir = fs2.mkdtempSync(os.tmpdir() + "/prompter-test-")
+const run = (cmd) => cp.spawnSync(cmd[0], cmd.slice(1), { encoding: "utf8" })
+const w = run(Model.saveStateCommand(dir + "/state.json", '{"ok":true}'))
+check("state write succeeds", w.status, 0)
+check("state file mode 0600", (fs2.statSync(dir + "/state.json").mode & 0o777), 0o600)
+check("guarded read returns content",
+  run(Model.guardedReadCommand(dir + "/state.json", 1000)).stdout, '{"ok":true}')
+fs2.symlinkSync("/etc/hostname", dir + "/link.json")
+check("guarded read rejects symlink",
+  run(Model.guardedReadCommand(dir + "/link.json", 1000)).status, 4)
+check("guarded read caps size",
+  run(Model.guardedReadCommand(dir + "/state.json", 4)).status, 8)
+fs2.rmSync(dir, { recursive: true, force: true })
 
 check("doctor has all stages", Model.doctorChecks().map((c) => c.id),
   ["usb", "packages", "dkms", "service", "drm-env", "wl-mirror"])

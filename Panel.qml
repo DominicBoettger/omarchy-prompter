@@ -455,9 +455,9 @@ Panel {
             Dropdown {
               width: parent.width
               label: "Script"
-              value: root.service ? root.service.currentScriptPath : ""
+              value: root.service ? root.service.currentScriptName : ""
               options: root.service ? root.service.scriptFiles.map(function (name) {
-                return { value: root.service.scriptsDir + "/" + name, label: name }
+                return { value: name, label: name }
               }) : []
               onChanged: function (value) { root.service.selectScript(value) }
             }

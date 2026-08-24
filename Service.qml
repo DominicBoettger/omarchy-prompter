@@ -99,7 +99,11 @@ Item {
   property string pendingFix: ""
 
   property var scriptFiles: []
-  property string currentScriptPath: ""
+  // Only a validated basename inside scriptsDir, never a raw path — a
+  // tampered state file must not be able to point the shell at other files.
+  property string currentScriptName: ""
+  readonly property string currentScriptPath:
+    currentScriptName !== "" ? scriptsDir + "/" + currentScriptName : ""
   property string currentScriptText: ""
   property real scrollSpeed: 40            // px/s
   property real fontScale: 1.0
@@ -139,6 +143,8 @@ Item {
     String(Quickshell.env("HOME") || "") + "/.local/share/omarchy-prompter/scripts"
 
   Component.onCompleted: {
+    stateReadProcess.command = Model.guardedReadCommand(statePath, 262144)
+    stateReadProcess.running = true
     refreshMonitors()
     runDoctor()
     listScripts()
@@ -354,6 +360,7 @@ Item {
     teleprompterPlaying = false
     teleprompterOpen = true
     lastError = ""
+    readCurrentScript()   // fresh, guarded read on every start
     persistProfile({ mode: "teleprompter" })
   }
 
@@ -423,9 +430,7 @@ Item {
   function writeStateNow() {
     var payload = JSON.stringify({ profiles: profiles, global: globalState }, null, 2)
     if (saveProcess.running) { saveDebounce.restart(); return }
-    saveProcess.command = ["sh", "-c",
-      'mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1".tmp && mv "$1".tmp "$1"',
-      "write-state", statePath, payload]
+    saveProcess.command = Model.saveStateCommand(statePath, payload)
     saveProcess.running = true
   }
 
@@ -439,7 +444,13 @@ Item {
         if (globalState.fontScale) fontScale = Number(globalState.fontScale)
         if (globalState.eyelinePosition) eyelinePosition = Number(globalState.eyelinePosition)
         if (globalState.teleprompterFlip !== undefined) teleprompterFlip = !!globalState.teleprompterFlip
-        if (globalState.lastScript) currentScriptPath = String(globalState.lastScript)
+        if (globalState.lastScript) {
+          // Older state stored a full path; confine to a basename either way.
+          var raw = String(globalState.lastScript)
+          var base = raw.split("/").pop()
+          var safe = Model.safeScriptName(base)
+          if (safe !== "") { currentScriptName = safe; readCurrentScript() }
+        }
       }
     } catch (e) { /* corrupt state falls back to defaults */ }
     stateLoaded = true
@@ -483,9 +494,18 @@ Item {
     scriptsProcess.running = true
   }
 
-  function selectScript(path) {
-    currentScriptPath = path
-    persistGlobal({ lastScript: path })
+  function selectScript(name) {
+    var safe = Model.safeScriptName(name)
+    if (safe === "") return
+    currentScriptName = safe
+    persistGlobal({ lastScript: safe })
+    readCurrentScript()
+  }
+
+  function readCurrentScript() {
+    if (currentScriptPath === "" || scriptReadProcess.running) return
+    scriptReadProcess.command = Model.guardedReadCommand(currentScriptPath, 1048576)
+    scriptReadProcess.running = true
   }
 
   // ---------------------------------------------------------------------
@@ -567,9 +587,11 @@ Item {
   // ---------------------------------------------------------------------
   // Processes
 
+  // All collectors run their producers behind a deadline and a byte
+  // ceiling so a wedged or hostile producer cannot balloon the shell.
   Process {
     id: monitorsProcess
-    command: ["hyprctl", "-j", "monitors"]
+    command: ["sh", "-c", "timeout 5 hyprctl -j monitors | head -c 1048576"]
     stdout: StdioCollector { id: monitorsOutput; waitForEnd: true }
     onExited: function (exitCode) {
       if (exitCode !== 0) return
@@ -583,7 +605,7 @@ Item {
 
   Process {
     id: clientsProcess
-    command: ["hyprctl", "-j", "clients"]
+    command: ["sh", "-c", "timeout 5 hyprctl -j clients | head -c 4194304"]
     stdout: StdioCollector { id: clientsOutput; waitForEnd: true }
     onExited: function (exitCode) {
       if (exitCode !== 0) return
@@ -621,7 +643,7 @@ Item {
 
   Process {
     id: activeWindowProcess
-    command: ["hyprctl", "-j", "activewindow"]
+    command: ["sh", "-c", "timeout 5 hyprctl -j activewindow | head -c 262144"]
     stdout: StdioCollector { id: activeWindowOutput; waitForEnd: true }
     onExited: function (exitCode) {
       if (exitCode !== 0) return
@@ -641,14 +663,21 @@ Item {
   Process {
     id: mirrorProcess
     stdinEnabled: true
-    stderr: StdioCollector { id: mirrorStderr; waitForEnd: true }
+    // Bounded: keep only the newest stderr line, truncated. A long-running
+    // producer must never accumulate output in the shell process.
+    property string lastStderrLine: ""
+    stderr: SplitParser {
+      splitMarker: "\n"
+      onRead: function (line) { mirrorProcess.lastStderrLine = String(line).slice(0, 300) }
+    }
+    onStarted: lastStderrLine = ""
     onExited: function (exitCode) {
       if (root.stopRequested) { root.stopRequested = false; return }
       if (root.activeMode === "mirror" || root.activeMode === "window" || root.activeMode === "region") {
-        var detail = String(mirrorStderr.text || "").trim().split("\n").pop() || ""
+        var detail = mirrorProcess.lastStderrLine
         root.lastError = "wl-mirror exited unexpectedly (code " + exitCode + ")."
           + (detail !== "" ? " " + detail : "")
-        console.log("prompter: wl-mirror exit", exitCode, mirrorStderr.text)
+        console.log("prompter: wl-mirror exit", exitCode, detail)
         root.activeMode = "off"
         followPoll.running = false
       }
@@ -680,14 +709,15 @@ Item {
   Process {
     id: cameraPollProcess
     command: ["sh", "-c",
+      'timeout 4 sh -c \'' +
       'for dev in /dev/video*; do [ -e "$dev" ] || continue; ' +
       'for pid in $(fuser "$dev" 2>/dev/null); do ' +
       'chain="$pid"; p="$pid"; i=0; while [ "$i" -lt 8 ]; do ' +
-      'p=$(awk \'/^PPid:/{print $2}\' "/proc/$p/status" 2>/dev/null); ' +
+      'p=$(awk "/^PPid:/{print \\$2}" "/proc/$p/status" 2>/dev/null); ' +
       '[ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null || break; ' +
       'chain="$chain,$p"; i=$((i+1)); done; ' +
-      'printf "%s|%s|%s\\n" "$dev" "$(cat "/proc/$pid/comm" 2>/dev/null)" "$chain"; ' +
-      'done; done']
+      'printf "%s|%s|%s\\n" "$dev" "$(head -c 64 "/proc/$pid/comm" 2>/dev/null)" "$chain"; ' +
+      'done; done\' | head -n 32 | head -c 8192']
     stdout: StdioCollector { id: cameraPollOutput; waitForEnd: true }
     onExited: {
       var holders = Model.parseCameraHolders(cameraPollOutput.text)
@@ -746,36 +776,36 @@ Item {
     command: ["sh", "-c",
       'dir="$HOME/.local/share/omarchy-prompter/scripts"; mkdir -p "$dir"; ' +
       'if [ -z "$(ls -A "$dir" 2>/dev/null)" ] && [ -f "$1" ]; then cp "$1" "$dir/welcome.md"; fi; ' +
-      'ls -1 "$dir"', "list-scripts", pluginDir + "/resources/example-script.md"]
+      'timeout 5 ls -1 "$dir" | head -n 200 | head -c 16384', "list-scripts",
+      pluginDir + "/resources/example-script.md"]
     stdout: StdioCollector { id: scriptsOutput; waitForEnd: true }
     onExited: function (exitCode) {
       if (exitCode !== 0) return
-      var names = String(scriptsOutput.text || "").split("\n").filter(function (n) {
-        return n.trim() !== "" && /\.(md|txt)$/i.test(n)
-      })
+      var names = String(scriptsOutput.text || "").split("\n")
+        .map(function (n) { return Model.safeScriptName(n.trim()) })
+        .filter(function (n) { return n !== "" })
       root.scriptFiles = names
-      if (root.currentScriptPath === "" && names.length)
-        root.currentScriptPath = root.scriptsDir + "/" + names[0]
+      if (root.currentScriptName === "" && names.length)
+        root.selectScript(names[0])
     }
   }
 
-  FileView {
-    id: stateFile
-    path: root.statePath
-    watchChanges: false
-    printErrors: false
-    onLoaded: root.applyLoadedState(text())
-    onLoadFailed: root.applyLoadedState("")
+  // Guarded reads (see Model.guardedReadCommand): refuse symlinks, validate
+  // the opened inode (regular file, owned by us, size ceiling), bounded read.
+  Process {
+    id: stateReadProcess
+    stdout: StdioCollector { id: stateReadOutput; waitForEnd: true }
+    onExited: function (exitCode) {
+      root.applyLoadedState(exitCode === 0 ? stateReadOutput.text : "")
+    }
   }
 
-  FileView {
-    id: scriptFile
-    path: root.currentScriptPath
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.currentScriptText = text()
-    onLoadFailed: root.currentScriptText = ""
+  Process {
+    id: scriptReadProcess
+    stdout: StdioCollector { id: scriptReadOutput; waitForEnd: true }
+    onExited: function (exitCode) {
+      root.currentScriptText = exitCode === 0 ? scriptReadOutput.text : ""
+    }
   }
 
   // ---------------------------------------------------------------------

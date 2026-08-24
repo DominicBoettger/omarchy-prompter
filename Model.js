@@ -211,7 +211,8 @@ function findMeetingClient(clients, monitors) {
 // per process holding a /dev/video* node.
 function parseCameraHolders(text) {
   var holders = []
-  var lines = String(text || "").split("\n")
+  // Cardinality ceiling: no sane system has more camera holders than this.
+  var lines = String(text || "").split("\n").slice(0, 32)
   for (var i = 0; i < lines.length; i++) {
     var parts = lines[i].split("|")
     if (parts.length < 3) continue
@@ -336,10 +337,13 @@ function doctorChecks() {
     },
     {
       id: "drm-env",
-      title: "evdi listed in AQ_DRM_DEVICES",
+      title: "evdi visible to Hyprland (AQ_DRM_DEVICES)",
+      // An empty/unset AQ_DRM_DEVICES means aquamarine scans every DRM
+      // device, which includes evdi. Only a set-but-incomplete list hides
+      // the DisplayLink output.
       command: ["sh", "-c",
-        "set -- /sys/class/drm/card[0-9]*; evdi=; for c; do d=$(basename \"$(readlink -f \"$c/device/driver\" 2>/dev/null)\" 2>/dev/null); [ \"$d\" = evdi ] && evdi=/dev/dri/$(basename \"$c\"); done; [ -n \"$evdi\" ] && case \":$AQ_DRM_DEVICES:\" in *:$evdi:*) exit 0;; esac; exit 1"],
-      failure: "Hyprland was started without the evdi DRM device. Install the env snippet and log in again.",
+        "[ -z \"$AQ_DRM_DEVICES\" ] && exit 0; set -- /sys/class/drm/card[0-9]*; evdi=; for c; do d=$(basename \"$(readlink -f \"$c/device/driver\" 2>/dev/null)\" 2>/dev/null); [ \"$d\" = evdi ] && evdi=/dev/dri/$(basename \"$c\"); done; [ -n \"$evdi\" ] && case \":$AQ_DRM_DEVICES:\" in *:$evdi:*) exit 0;; esac; exit 1"],
+      failure: "AQ_DRM_DEVICES is set but misses the evdi DRM device, so Hyprland cannot see the prompter. Install the env snippet and log in again.",
       fix: "drm-env"
     },
     {
@@ -381,6 +385,48 @@ function fixCommand(fixId, pluginDir) {
     + ".complete\"; else printf '%s\\n' \"$status\" > " + marker
     + ".failed\"; fi; read -r -p 'Press enter to close…' _ || true; (exit \"$status\")"
   return ["omarchy", "launch", "floating", "terminal", "with", "presentation", script]
+}
+
+// ---------------------------------------------------------------------------
+// Guarded file IO
+//
+// The shell must never trust files an attacker could have replaced. Reads
+// refuse symlinks at the path, then validate the inode actually opened
+// (same descriptor via /proc/self/fd): regular file, owned by the current
+// user, within the size ceiling — and read at most that many bytes from the
+// already-open descriptor. Writes go through an exclusive random mode-0600
+// temp file and an atomic rename (rename does not follow a symlink at the
+// destination).
+
+function guardedReadCommand(path, maxBytes) {
+  var script =
+    'f="$1"; max="$2"; ' +
+    '[ -e "$f" ] || exit 3; ' +
+    '[ ! -L "$f" ] || exit 4; ' +
+    'exec 3<"$f" || exit 5; ' +
+    'info=$(stat -Lc "%u:%F:%s" /proc/self/fd/3 2>/dev/null) || exit 6; ' +
+    'case "$info" in "$(id -u)":"regular file":*) ;; *) exit 7 ;; esac; ' +
+    'size=${info##*:}; ' +
+    '[ "$size" -le "$max" ] 2>/dev/null || exit 8; ' +
+    'head -c "$max" <&3'
+  return ["sh", "-c", script, "guarded-read", String(path), String(Math.max(1, maxBytes | 0))]
+}
+
+function saveStateCommand(path, payload) {
+  var script =
+    'path="$1"; dir=$(dirname "$path"); mkdir -p "$dir" || exit 1; ' +
+    'umask 077; tmp=$(mktemp "$dir/.state.XXXXXXXX") || exit 1; ' +
+    'printf %s "$2" > "$tmp" && mv -f "$tmp" "$path" || { rm -f "$tmp"; exit 1; }'
+  return ["sh", "-c", script, "write-state", String(path), String(payload)]
+}
+
+// Script selection is confined to the scripts directory: only a plain
+// basename with a known extension survives, never a path.
+function safeScriptName(name) {
+  var n = String(name || "")
+  if (n.indexOf("/") !== -1 || n.indexOf("\\") !== -1 || n.indexOf("..") !== -1) return ""
+  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]{0,120}\.(md|txt)$/i.test(n)) return ""
+  return n
 }
 
 // ---------------------------------------------------------------------------
