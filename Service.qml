@@ -836,11 +836,12 @@ Item {
     id: refocusTimer
     interval: 250
     onTriggered: {
-      if (root.pendingRefocus === "") return
       // Omarchy's Hyprland uses the Lua config parser; classic dispatcher
-      // strings are rejected there.
-      Hyprland.dispatch('hl.dsp.focus({ monitor = "' + root.pendingRefocus + '" })')
+      // strings are rejected there. The name is charset-validated so it can
+      // never escape the Lua string literal.
+      var name = Model.safeConnectorName(root.pendingRefocus)
       root.pendingRefocus = ""
+      if (name !== "") Hyprland.dispatch('hl.dsp.focus({ monitor = "' + name + '" })')
     }
   }
   Timer { id: saveDebounce; interval: 400; onTriggered: root.writeStateNow() }

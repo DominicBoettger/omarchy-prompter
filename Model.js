@@ -403,13 +403,17 @@ function guardedReadCommand(path, maxBytes) {
     'f="$1"; max="$2"; ' +
     '[ -e "$f" ] || exit 3; ' +
     '[ ! -L "$f" ] || exit 4; ' +
+    '[ -f "$f" ] || exit 9; ' +   // opening a FIFO would block forever
     'exec 3<"$f" || exit 5; ' +
     'info=$(stat -Lc "%u:%F:%s" /proc/self/fd/3 2>/dev/null) || exit 6; ' +
     'case "$info" in "$(id -u)":"regular file":*) ;; *) exit 7 ;; esac; ' +
     'size=${info##*:}; ' +
     '[ "$size" -le "$max" ] 2>/dev/null || exit 8; ' +
     'head -c "$max" <&3'
-  return ["sh", "-c", script, "guarded-read", String(path), String(Math.max(1, maxBytes | 0))]
+  // The outer deadline is the real FIFO/TOCTOU guard: even if the path is
+  // swapped for a pipe between check and open, the read cannot hang.
+  return ["timeout", "5", "sh", "-c", script, "guarded-read",
+    String(path), String(Math.max(1, maxBytes | 0))]
 }
 
 function saveStateCommand(path, payload) {
@@ -418,6 +422,14 @@ function saveStateCommand(path, payload) {
     'umask 077; tmp=$(mktemp "$dir/.state.XXXXXXXX") || exit 1; ' +
     'printf %s "$2" > "$tmp" && mv -f "$tmp" "$path" || { rm -f "$tmp"; exit 1; }'
   return ["sh", "-c", script, "write-state", String(path), String(payload)]
+}
+
+// Connector names come from DRM and are interpolated into a Lua dispatch
+// string; permit only the charset real connectors use so no quoting can
+// ever escape the string literal.
+function safeConnectorName(name) {
+  var n = String(name || "")
+  return /^[A-Za-z0-9._-]{1,64}$/.test(n) ? n : ""
 }
 
 // Script selection is confined to the scripts directory: only a plain

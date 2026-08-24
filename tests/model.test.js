@@ -16,7 +16,7 @@ new Function(
       "streamTransformLine", "regionForClient", "regionForOutput", "monitorForClient",
       "matchMeetingWindow", "matchMeetingTitle", "findMeetingClient",
       "parseCameraHolders", "windowForCameraHolders", "parseScript", "formatDuration",
-      "guardedReadCommand", "saveStateCommand", "safeScriptName",
+      "guardedReadCommand", "saveStateCommand", "safeScriptName", "safeConnectorName",
       "remainingSeconds", "doctorChecks", "fixCommand", "defaultProfile",
       "monitorKey", "DEFAULT_MEETING_TITLE_PATTERNS",
     ]
@@ -131,8 +131,8 @@ check("hidden dotfile rejected", Model.safeScriptName(".hidden.md"), "")
 // Guarded IO commands run through sh with the path as a positional arg.
 const readCmd = Model.guardedReadCommand("/tmp/x state.json", 1000)
 check("guarded read is argv-safe", readCmd.slice(-2), ["/tmp/x state.json", "1000"])
-check("guarded read refuses symlinks", readCmd[2].includes('[ ! -L "$f" ]'), true)
-check("guarded read validates opened fd", readCmd[2].includes("/proc/self/fd/3"), true)
+check("guarded read refuses symlinks", readCmd[4].includes('[ ! -L "$f" ]'), true)
+check("guarded read validates opened fd", readCmd[4].includes("/proc/self/fd/3"), true)
 const saveCmd = Model.saveStateCommand("/tmp/state.json", '{"a":1}')
 check("state write uses mktemp", saveCmd[2].includes("mktemp"), true)
 check("state write sets umask 077", saveCmd[2].includes("umask 077"), true)
@@ -153,7 +153,17 @@ check("guarded read rejects symlink",
   run(Model.guardedReadCommand(dir + "/link.json", 1000)).status, 4)
 check("guarded read caps size",
   run(Model.guardedReadCommand(dir + "/state.json", 4)).status, 8)
+// A FIFO at the path must fail fast, never block (kimi-k3 finding).
+cp.spawnSync("mkfifo", [dir + "/fifo.json"])
+const fifoStart = Date.now()
+check("guarded read rejects fifo",
+  run(Model.guardedReadCommand(dir + "/fifo.json", 1000)).status, 9)
+check("fifo rejection is immediate", Date.now() - fifoStart < 2000, true)
+check("guarded read has outer deadline", Model.guardedReadCommand("/x", 1).slice(0, 2), ["timeout", "5"])
 fs2.rmSync(dir, { recursive: true, force: true })
+
+check("connector name passes", Model.safeConnectorName("DVI-I-1"), "DVI-I-1")
+check("lua injection rejected", Model.safeConnectorName('x" }) os.execute("rm'), "")
 
 check("doctor has all stages", Model.doctorChecks().map((c) => c.id),
   ["usb", "packages", "dkms", "service", "drm-env", "wl-mirror"])
