@@ -131,8 +131,8 @@ check("hidden dotfile rejected", Model.safeScriptName(".hidden.md"), "")
 // Guarded IO commands run through sh with the path as a positional arg.
 const readCmd = Model.guardedReadCommand("/tmp/x state.json", 1000)
 check("guarded read is argv-safe", readCmd.slice(-2), ["/tmp/x state.json", "1000"])
-check("guarded read refuses symlinks", readCmd[4].includes('[ ! -L "$f" ]'), true)
-check("guarded read validates opened fd", readCmd[4].includes("/proc/self/fd/3"), true)
+check("guarded read opens with O_NOFOLLOW", readCmd[4].includes("O_NOFOLLOW"), true)
+check("guarded read validates via fstat", readCmd[4].includes("os.fstat(fd)"), true)
 const saveCmd = Model.saveStateCommand("/tmp/state.json", '{"a":1}')
 check("state write uses mktemp", saveCmd[2].includes("mktemp"), true)
 check("state write sets umask 077", saveCmd[2].includes("umask 077"), true)
@@ -151,6 +151,12 @@ check("guarded read returns content",
 fs2.symlinkSync("/etc/hostname", dir + "/link.json")
 check("guarded read rejects symlink",
   run(Model.guardedReadCommand(dir + "/link.json", 1000)).status, 4)
+// A symlink to a perfectly valid file we own must STILL be refused — proves
+// O_NOFOLLOW rejects at open, not merely when the target looks wrong (the
+// TOCTOU the maintainer flagged: a raced-in symlink to an own regular file).
+fs2.symlinkSync(dir + "/state.json", dir + "/ownlink.json")
+check("guarded read rejects symlink to own file",
+  run(Model.guardedReadCommand(dir + "/ownlink.json", 1000)).status, 4)
 check("guarded read caps size",
   run(Model.guardedReadCommand(dir + "/state.json", 4)).status, 8)
 // A FIFO at the path must fail fast, never block (kimi-k3 finding).

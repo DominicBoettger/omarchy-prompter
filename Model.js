@@ -398,22 +398,36 @@ function fixCommand(fixId, pluginDir) {
 // temp file and an atomic rename (rename does not follow a symlink at the
 // destination).
 
+// The open must be atomic: a check-then-open shell sequence lets a symlink
+// be raced into the pathname between the test and the open. Python opens
+// with O_NOFOLLOW (the open itself fails on a final-component symlink, no
+// window) plus O_NONBLOCK (a FIFO cannot block it), then validates the
+// descriptor it actually holds — regular file, owner, size — before reading.
+// python3 is guaranteed on Omarchy (uwsm depends on it).
 function guardedReadCommand(path, maxBytes) {
-  var script =
-    'f="$1"; max="$2"; ' +
-    '[ -e "$f" ] || exit 3; ' +
-    '[ ! -L "$f" ] || exit 4; ' +
-    '[ -f "$f" ] || exit 9; ' +   // opening a FIFO would block forever
-    'exec 3<"$f" || exit 5; ' +
-    'info=$(stat -Lc "%u:%F:%s" /proc/self/fd/3 2>/dev/null) || exit 6; ' +
-    'case "$info" in "$(id -u)":"regular file":*) ;; *) exit 7 ;; esac; ' +
-    'size=${info##*:}; ' +
-    '[ "$size" -le "$max" ] 2>/dev/null || exit 8; ' +
-    'head -c "$max" <&3'
-  // The outer deadline is the real FIFO/TOCTOU guard: even if the path is
-  // swapped for a pipe between check and open, the read cannot hang.
-  return ["timeout", "5", "sh", "-c", script, "guarded-read",
-    String(path), String(Math.max(1, maxBytes | 0))]
+  var py =
+    "import os,sys,stat\n" +
+    "p=sys.argv[1]; m=int(sys.argv[2])\n" +
+    "try:\n" +
+    "    fd=os.open(p, os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)\n" +
+    "except FileNotFoundError: sys.exit(3)\n" +
+    "except OSError: sys.exit(4)\n" +   // ELOOP (symlink) and friends
+    "try:\n" +
+    "    st=os.fstat(fd)\n" +
+    "    if not stat.S_ISREG(st.st_mode): sys.exit(9)\n" +   // fifo/dir/device
+    "    if st.st_uid != os.getuid(): sys.exit(7)\n" +
+    "    if st.st_size > m: sys.exit(8)\n" +
+    "    os.set_blocking(fd, True)\n" +
+    "    left=m; buf=b''\n" +
+    "    while left>0:\n" +
+    "        chunk=os.read(fd, min(65536,left))\n" +
+    "        if not chunk: break\n" +
+    "        buf+=chunk; left-=len(chunk)\n" +
+    "    os.write(1, buf)\n" +
+    "finally:\n" +
+    "    os.close(fd)\n"
+  // Outer deadline stays as belt-and-suspenders against any unforeseen block.
+  return ["timeout", "5", "python3", "-c", py, String(path), String(Math.max(1, maxBytes | 0))]
 }
 
 function saveStateCommand(path, payload) {
